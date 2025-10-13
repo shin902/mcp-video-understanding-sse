@@ -34,6 +34,7 @@ describe('SSE endpoint', () => {
 		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://client.example');
 		expect(response.headers.get('Access-Control-Allow-Credentials')).toBe('true');
 		expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+		expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Accept');
 	});
 
 	it('streams events when authorized', async () => {
@@ -53,13 +54,42 @@ describe('SSE endpoint', () => {
 		const { value, done } = await reader!.read();
 		if (done) break;
 		combined += decoder.decode(value);
-		if (combined.includes('data: {"status":"ok"}')) {
+		if (combined.includes('data: "ok"')) {
 			break;
 		}
 	}
 	expect(combined).toContain('event: ready');
-	expect(combined).toContain('data: {"status":"ok"}');
+	expect(combined).toContain('data: "ok"');
 
 	await reader!.cancel();
+	});
+
+	it('handles rpc preflight with CORS headers', async () => {
+		const response = await SELF.fetch('https://example.com/rpc', {
+			method: 'OPTIONS',
+			headers: {
+				Origin: 'https://client.example',
+				'Access-Control-Request-Method': 'POST',
+				'Access-Control-Request-Headers': 'authorization, content-type',
+			},
+		});
+		expect(response.status).toBe(204);
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://client.example');
+		expect(response.headers.get('Access-Control-Allow-Credentials')).toBe('true');
+		expect(response.headers.get('Access-Control-Allow-Methods')).toContain('POST');
+	});
+
+	it('returns CORS headers for unauthorized rpc call', async () => {
+		const response = await SELF.fetch('https://example.com/rpc', {
+			method: 'POST',
+			headers: {
+				Origin: 'https://client.example',
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({ method: 'analyzeRemoteVideo', args: [] }),
+		});
+		expect(response.status).toBe(401);
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://client.example');
+		expect(response.headers.get('Access-Control-Allow-Credentials')).toBe('true');
 	});
 });
