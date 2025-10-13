@@ -31,7 +31,8 @@ describe('SSE endpoint', () => {
 			},
 		});
 		expect(response.status).toBe(204);
-		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://client.example');
+		expect(response.headers.get('Access-Control-Allow-Credentials')).toBe('true');
 		expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
 	});
 
@@ -52,12 +53,12 @@ describe('SSE endpoint', () => {
 		const { value, done } = await reader!.read();
 		if (done) break;
 		combined += decoder.decode(value);
-		if (combined.includes('data: "ok"')) {
+		if (combined.includes('data: {"status":"ok"}')) {
 			break;
 		}
 	}
 	expect(combined).toContain('event: ready');
-	expect(combined).toContain('data: "ok"');
+	expect(combined).toContain('data: {"status":"ok"}');
 
 	await reader!.cancel();
 	});

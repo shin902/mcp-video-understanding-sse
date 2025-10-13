@@ -75,15 +75,22 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
     const url = new URL(request.url)
 
     if (url.pathname === '/sse') {
+      const origin = request.headers.get('Origin')
+      const baseCorsHeaders: Record<string, string> = {
+        'Access-Control-Allow-Origin': origin ?? '*',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Max-Age': '86400',
+        'Vary': 'Origin',
+      }
+      if (origin) {
+        baseCorsHeaders['Access-Control-Allow-Credentials'] = 'true'
+      }
+
       if (request.method === 'OPTIONS') {
         return new Response(null, {
           status: 204,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Access-Control-Max-Age': '86400',
-          },
+          headers: baseCorsHeaders,
         })
       }
 
@@ -94,7 +101,8 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
         return new Response('Unauthorized', {
           status: 401,
           headers: {
-            'Access-Control-Allow-Origin': '*',
+            ...baseCorsHeaders,
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
           },
         })
       }
@@ -106,7 +114,7 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
         start(controller) {
           // Immediately send a ready event so SSE clients know the stream is alive.
           controller.enqueue(encoder.encode('event: ready\n'))
-          controller.enqueue(encoder.encode('data: "ok"\n\n'))
+          controller.enqueue(encoder.encode('data: {"status":"ok"}\n\n'))
 
           intervalHandle = setInterval(() => {
             controller.enqueue(encoder.encode('event: ping\n'))
@@ -136,7 +144,7 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache, no-transform',
           Connection: 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
+          ...baseCorsHeaders,
         },
       })
     }
