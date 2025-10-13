@@ -1,20 +1,21 @@
-#!/usr/bin/env node
-import "dotenv/config";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig } from "./config.js";
-import { createServer } from "./server.js";
 
-async function main(): Promise<void> {
-  const config = loadConfig();
-  const server = createServer(config);
-  const transport = new StdioServerTransport();
+import { WorkerEntrypoint } from 'cloudflare:workers'
+import { ProxyToSelf } from 'workers-mcp'
 
-  await server.connect(transport);
+export default class MyWorker extends WorkerEntrypoint<Env> {
+  /**
+   * A warm, friendly greeting from your new Workers MCP server.
+   * @param name {string} the name of the person we are greeting.
+   * @return {string} the contents of our greeting.
+   */
+  sayHello(name: string) {
+    return `Hello from an MCP Worker, ${name}!`
+  }
 
-  console.error(`Gemini Video MCP Server ready (model: ${config.model})`);
+  /**
+   * @ignore
+   **/
+  async fetch(request: Request): Promise<Response> {
+    return new ProxyToSelf(this).fetch(request)
+  }
 }
-
-main().catch((error) => {
-  console.error("Fatal error while running Gemini MCP server:", error);
-  process.exit(1);
-});
