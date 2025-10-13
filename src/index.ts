@@ -72,6 +72,75 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
    * @ignore
    */
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+
+    if (url.pathname === '/sse') {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Max-Age': '86400',
+          },
+        })
+      }
+
+      const secret = this.env.SHARED_SECRET
+      const authHeader = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '') ?? ''
+
+      if (!secret || secret.length !== 64 || authHeader !== secret) {
+        return new Response('Unauthorized', {
+          status: 401,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+          },
+        })
+      }
+
+      const encoder = new TextEncoder()
+      let intervalHandle: ReturnType<typeof setInterval> | null = null
+
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // Immediately send a ready event so SSE clients know the stream is alive.
+          controller.enqueue(encoder.encode('event: ready\n'))
+          controller.enqueue(encoder.encode('data: "ok"\n\n'))
+
+          intervalHandle = setInterval(() => {
+            controller.enqueue(encoder.encode('event: ping\n'))
+            controller.enqueue(encoder.encode(`data: ${Date.now()}\n\n`))
+          }, 25000)
+
+          controller.enqueue(encoder.encode(': keep-alive\n\n'))
+        },
+        cancel() {
+          if (intervalHandle) {
+            clearInterval(intervalHandle)
+            intervalHandle = null
+          }
+        },
+      })
+
+      request.signal.addEventListener('abort', () => {
+        if (intervalHandle) {
+          clearInterval(intervalHandle)
+          intervalHandle = null
+        }
+      })
+
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+        },
+      })
+    }
+
     return new ProxyToSelf(this).fetch(request)
   }
 

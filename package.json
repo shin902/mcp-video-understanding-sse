@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "deploy": "workers-mcp docgen src/index.ts && wrangler deploy",
+    "build": "workers-mcp docgen src/index.ts && wrangler deploy --dry-run",
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest",
