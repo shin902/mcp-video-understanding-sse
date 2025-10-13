@@ -1,0 +1,8 @@
+# Rename this file to `.dev.vars` for local development.
+# Wrangler will automatically load values in `.dev.vars` when running `wrangler dev`.
+
+# Google Gemini API key
+GOOGLE_API_KEY=your-google-api-key
+
+# Shared secret used when connecting to the SSE endpoint
+SHARED_SECRET=64-character-hex-secret
