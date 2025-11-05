@@ -3,20 +3,84 @@
 ## 目次
 
 1. [概要](#概要)
-2. [SSEトランスポートとは](#sseトランスポートとは)
-3. [このプロジェクトのSSE実装](#このプロジェクトのsse実装)
-4. [セットアップ](#セットアップ)
-5. [クライアント接続](#クライアント接続)
-6. [認証](#認証)
-7. [エンドポイント詳細](#エンドポイント詳細)
-8. [トラブルシューティング](#トラブルシューティング)
-9. [技術仕様](#技術仕様)
+2. [クイックスタート](#クイックスタート)
+3. [SSEトランスポートとは](#sseトランスポートとは)
+4. [このプロジェクトのSSE実装](#このプロジェクトのsse実装)
+5. [セットアップ](#セットアップ)
+6. [クライアント接続](#クライアント接続)
+7. [認証](#認証)
+8. [エンドポイント詳細](#エンドポイント詳細)
+9. [トラブルシューティング](#トラブルシューティング)
+10. [技術仕様](#技術仕様)
 
 ---
 
 ## 概要
 
 このMCPサーバーは、**Server-Sent Events (SSE)** トランスポートをサポートしています。SSEは、サーバーからクライアントへのリアルタイム通信を実現するHTTPベースのプロトコルで、長時間実行される接続を維持し、サーバーからクライアントへデータをプッシュすることができます。
+
+### 重要な注意事項
+
+> **⚠️ SSEトランスポートの将来性について**
+>
+> MCP仕様のバージョン2025-03-26において、SSEトランスポートは非推奨となり、**Streamable HTTP (HTTP Stream Transport)** が推奨されています。ただし、SSEは後方互換性のためにサポートが継続されており、既存のMCPクライアント（Claude Desktopなど）との統合には引き続き利用可能です。
+>
+> 新規プロジェクトでは、Streamable HTTPトランスポートの使用を検討することをお勧めします。
+
+## クイックスタート
+
+5分でSSE接続を試すための最小限の手順：
+
+### 1. シークレットの生成
+
+```bash
+# 64文字のランダムシークレットを生成
+SECRET=$(openssl rand -hex 32)
+echo "SHARED_SECRET=$SECRET" > .dev.vars
+echo "GOOGLE_API_KEY=your_api_key_here" >> .dev.vars
+```
+
+### 2. サーバーの起動
+
+```bash
+npm install
+npm run dev
+```
+
+### 3. SSE接続のテスト
+
+```bash
+# .dev.varsからシークレットを読み込んで接続
+SECRET=$(grep SHARED_SECRET .dev.vars | cut -d'=' -f2)
+curl -N -H "Authorization: Bearer $SECRET" http://127.0.0.1:8787/sse
+```
+
+### 4. ツールのリスト取得
+
+```bash
+curl -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+```
+
+### 5. 動画分析の実行
+
+```bash
+curl -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "analyzeRemoteVideo",
+      "arguments": {
+        "videoUrl": "https://example.com/video.mp4",
+        "prompt": "この動画を要約してください"
+      }
+    },
+    "id": 1
+  }'
+```
 
 ## SSEトランスポートとは
 
@@ -75,6 +139,42 @@ MCPサーバーは、複数のトランスポート方式をサポートして�
                                      ┌─────────────────┐
                                      │   Gemini API    │
                                      └─────────────────┘
+```
+
+### workers-mcpの役割
+
+このプロジェクトでは、`workers-mcp`パッケージを使用してMCPサーバー機能を実装しています。
+
+**workers-mcpとは**:
+- Cloudflare Workers上でMCPサーバーを簡単に構築するためのライブラリ
+- `WorkerEntrypoint`を拡張してMCPツールを公開
+- SSE/HTTPトランスポートのハンドリングを簡素化
+- `ProxyToSelf`を使用してRPCエンドポイントを自動的に処理
+
+**主な機能**:
+1. **自動ドキュメント生成**: `workers-mcp docgen`コマンドでツールのドキュメントを生成
+2. **型安全性**: TypeScriptによる型チェック
+3. **簡単なデプロイ**: Cloudflare Workersへのシームレスなデプロイ
+
+**使用例（src/index.ts）**:
+```typescript
+import { WorkerEntrypoint } from 'cloudflare:workers'
+import { ProxyToSelf } from 'workers-mcp'
+
+export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
+  // MCPツールをメソッドとして定義
+  async analyzeRemoteVideo(videoUrl: string, prompt?: string) {
+    // 実装...
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    // RPCエンドポイントはProxyToSelfが自動処理
+    if (url.pathname === '/rpc') {
+      return await new ProxyToSelf(this).fetch(request)
+    }
+    // SSEエンドポイントは手動で実装
+  }
+}
 ```
 
 ## セットアップ
@@ -180,6 +280,164 @@ curl -X POST http://127.0.0.1:8787/rpc \
     }
   }
 }
+```
+
+### JavaScriptクライアントの実装例
+
+ブラウザやNode.jsからEventSourceを使用して接続することもできます：
+
+#### ブラウザでの実装
+
+```javascript
+// SSE接続の確立
+const SECRET = 'your_64_character_secret_here';
+const eventSource = new EventSource('http://127.0.0.1:8787/sse', {
+  // 注意: EventSourceはカスタムヘッダーをサポートしていないため、
+  // 認証が必要な場合はURLにトークンを含める方法を検討する必要があります
+  // この実装では別途fetchでRPC呼び出しを行います
+});
+
+// イベントリスナーの設定
+eventSource.addEventListener('ready', (event) => {
+  console.log('SSE接続が確立されました:', event.data);
+});
+
+eventSource.addEventListener('ping', (event) => {
+  console.log('Keep-alive ping受信:', event.data);
+});
+
+eventSource.onerror = (error) => {
+  console.error('SSE接続エラー:', error);
+};
+
+// RPCリクエストの送信（別途fetch使用）
+async function callTool(toolName, args) {
+  const response = await fetch('http://127.0.0.1:8787/rpc', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: {
+        name: toolName,
+        arguments: args
+      },
+      id: Date.now()
+    })
+  });
+
+  return await response.json();
+}
+
+// 使用例
+callTool('analyzeRemoteVideo', {
+  videoUrl: 'https://example.com/video.mp4',
+  prompt: 'この動画を要約してください'
+}).then(result => {
+  console.log('結果:', result);
+});
+```
+
+#### Node.jsでの実装
+
+```javascript
+import EventSource from 'eventsource';
+import fetch from 'node-fetch';
+
+const SECRET = 'your_64_character_secret_here';
+
+// Node.js環境ではカスタムヘッダーをサポート
+const eventSource = new EventSource('http://127.0.0.1:8787/sse', {
+  headers: {
+    'Authorization': `Bearer ${SECRET}`
+  }
+});
+
+eventSource.addEventListener('ready', (event) => {
+  console.log('接続確立:', event.data);
+});
+
+eventSource.addEventListener('ping', (event) => {
+  console.log('Ping:', new Date(parseInt(event.data)));
+});
+
+eventSource.addEventListener('error', (error) => {
+  console.error('エラー:', error);
+});
+
+// RPCリクエストの送信
+async function listTools() {
+  const response = await fetch('http://127.0.0.1:8787/rpc', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'tools/list',
+      id: 1
+    })
+  });
+
+  return await response.json();
+}
+
+// ツール一覧を取得
+listTools().then(tools => {
+  console.log('利用可能なツール:', tools);
+});
+```
+
+### 完全な使用フロー例
+
+以下は、SSE接続からツール呼び出しまでの完全なフローです：
+
+```bash
+#!/bin/bash
+# complete-flow-example.sh
+
+# 1. 環境変数の読み込み
+SECRET=$(grep SHARED_SECRET .dev.vars | cut -d'=' -f2)
+
+echo "=== Step 1: SSE接続のテスト ==="
+# バックグラウンドでSSE接続を維持（5秒後に終了）
+timeout 5s curl -N -H "Authorization: Bearer $SECRET" \
+  http://127.0.0.1:8787/sse &
+
+sleep 1
+
+echo -e "\n=== Step 2: ツール一覧の取得 ==="
+curl -s -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' | jq .
+
+sleep 1
+
+echo -e "\n=== Step 3: analyzeRemoteVideoツールの呼び出し ==="
+curl -s -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "analyzeRemoteVideo",
+      "arguments": {
+        "videoUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "prompt": "この動画の内容を簡潔に要約してください"
+      }
+    },
+    "id": 2
+  }' | jq .
+
+echo -e "\n=== 完了 ==="
+```
+
+実行方法：
+```bash
+chmod +x complete-flow-example.sh
+./complete-flow-example.sh
 ```
 
 ## 認証
@@ -290,6 +548,146 @@ Access-Control-Allow-Headers: Authorization, Content-Type, Accept
 }
 ```
 
+### 利用可能なMCPメソッド
+
+RPCエンドポイントでは、以下のJSON-RPC 2.0メソッドが利用可能です：
+
+#### 1. `tools/list` - ツール一覧の取得
+
+利用可能なツールのリストを取得します。
+
+**リクエスト**:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/list",
+  "id": 1
+}
+```
+
+**レスポンス**:
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "name": "analyzeRemoteVideo",
+        "description": "リモート動画URLを Gemini で分析します。YouTube などの公開動画URLに対応しています。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "videoUrl": {
+              "type": "string",
+              "description": "分析する動画のURL（YouTube等）"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "オプションのカスタムプロンプト（デフォルト: 要約プロンプト）"
+            },
+            "model": {
+              "type": "string",
+              "description": "使用するGeminiモデル名（デフォルト: gemini-2.5-flash）"
+            }
+          },
+          "required": ["videoUrl"]
+        }
+      }
+    ]
+  },
+  "id": 1
+}
+```
+
+#### 2. `tools/call` - ツールの呼び出し
+
+指定したツールを実行します。
+
+**リクエスト**:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "tools/call",
+  "params": {
+    "name": "analyzeRemoteVideo",
+    "arguments": {
+      "videoUrl": "https://example.com/video.mp4",
+      "prompt": "この動画を3行で要約してください",
+      "model": "gemini-2.5-flash"
+    }
+  },
+  "id": 2
+}
+```
+
+**レスポンス（成功）**:
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "動画の要約結果がここに返されます..."
+      }
+    ]
+  },
+  "id": 2
+}
+```
+
+**レスポンス（エラー）**:
+```json
+{
+  "jsonrpc": "2.0",
+  "error": {
+    "code": -32603,
+    "message": "Internal error",
+    "data": "Invalid video URL: https://example.com/video.mp4"
+  },
+  "id": 2
+}
+```
+
+#### 3. `initialize` - サーバー初期化（オプション）
+
+MCPクライアントがサーバーとの接続を初期化する際に使用します。
+
+**リクエスト**:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "example-client",
+      "version": "1.0.0"
+    }
+  },
+  "id": 1
+}
+```
+
+**レスポンス**:
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "tools": {}
+    },
+    "serverInfo": {
+      "name": "gemini-video-mcp",
+      "version": "1.0.0"
+    }
+  },
+  "id": 1
+}
+```
+
 ## トラブルシューティング
 
 ### 401 Unauthorized エラー
@@ -355,7 +753,280 @@ curl -X POST http://127.0.0.1:8787/rpc \
   }'
 ```
 
+## デバッグとテスト
+
+### デバッグ方法
+
+#### 1. ブラウザの開発者ツールでSSEストリームを確認
+
+1. ブラウザで開発者ツールを開く（F12）
+2. Networkタブを選択
+3. EventStreamまたはAllでフィルタリング
+4. SSEエンドポイントへのリクエストを確認
+5. Messagesタブでイベントストリームをリアルタイムで監視
+
+#### 2. curlでのデバッグ
+
+**詳細なデバッグ出力**:
+```bash
+SECRET=$(grep SHARED_SECRET .dev.vars | cut -d'=' -f2)
+
+# -v オプションで詳細なログを出力
+curl -v -N \
+  -H "Authorization: Bearer $SECRET" \
+  http://127.0.0.1:8787/sse
+```
+
+**タイムアウト設定**:
+```bash
+# 60秒でタイムアウト
+curl -N --max-time 60 \
+  -H "Authorization: Bearer $SECRET" \
+  http://127.0.0.1:8787/sse
+```
+
+**特定のイベントのみを抽出**:
+```bash
+# pingイベントのみを表示
+curl -N -H "Authorization: Bearer $SECRET" \
+  http://127.0.0.1:8787/sse 2>/dev/null | \
+  grep -A 1 "event: ping"
+```
+
+#### 3. Wranglerログの確認
+
+開発サーバーのログをリアルタイムで確認：
+
+```bash
+# 別のターミナルで開発サーバーを起動
+npm run dev
+
+# ログが自動的にコンソールに出力される
+# console.log/console.errorの出力を確認
+```
+
+本番環境のログ確認：
+
+```bash
+# Cloudflare Workersのログをストリーミング
+wrangler tail
+
+# 特定のイベントでフィルタリング
+wrangler tail --format json | jq 'select(.event.request.url | contains("/sse"))'
+```
+
+#### 4. RPCエンドポイントのテスト
+
+**基本的なテスト**:
+```bash
+# ツール一覧を取得
+curl -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' | jq .
+
+# 結果をファイルに保存
+curl -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' > tools.json
+```
+
+**エラーレスポンスのテスト**:
+```bash
+# 無効なメソッド
+curl -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"invalid/method","id":1}' | jq .
+
+# 無効なパラメータ
+curl -X POST http://127.0.0.1:8787/rpc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "analyzeRemoteVideo",
+      "arguments": {
+        "videoUrl": "invalid-url"
+      }
+    },
+    "id": 1
+  }' | jq .
+```
+
+#### 5. 接続状態の監視
+
+**継続的な監視スクリプト**:
+```bash
+#!/bin/bash
+# monitor-sse.sh
+
+SECRET=$(grep SHARED_SECRET .dev.vars | cut -d'=' -f2)
+
+while true; do
+  echo "[$(date +%H:%M:%S)] SSE接続テスト..."
+
+  # 5秒間SSE接続を維持してイベントを確認
+  timeout 5s curl -N -H "Authorization: Bearer $SECRET" \
+    http://127.0.0.1:8787/sse 2>/dev/null | \
+    head -10
+
+  EXIT_CODE=$?
+
+  if [ $EXIT_CODE -eq 124 ]; then
+    echo "✅ 接続成功（タイムアウトで正常終了）"
+  else
+    echo "❌ 接続失敗（終了コード: $EXIT_CODE）"
+  fi
+
+  echo "---"
+  sleep 10
+done
+```
+
+実行：
+```bash
+chmod +x monitor-sse.sh
+./monitor-sse.sh
+```
+
+### テストツール
+
+#### Postmanでのテスト
+
+1. **SSE接続のテスト**:
+   - 新しいリクエストを作成
+   - メソッド: GET
+   - URL: `http://127.0.0.1:8787/sse`
+   - Headers: `Authorization: Bearer <your_secret>`
+   - Sendをクリックしてイベントストリームを確認
+
+2. **RPCリクエストのテスト**:
+   - 新しいリクエストを作成
+   - メソッド: POST
+   - URL: `http://127.0.0.1:8787/rpc`
+   - Headers: `Content-Type: application/json`
+   - Body (raw JSON):
+     ```json
+     {
+       "jsonrpc": "2.0",
+       "method": "tools/list",
+       "id": 1
+     }
+     ```
+
+#### Insomnia / HTTPieでのテスト
+
+```bash
+# HTTPieを使用
+pip install httpie
+
+# ツール一覧取得
+http POST http://127.0.0.1:8787/rpc \
+  Content-Type:application/json \
+  jsonrpc=2.0 \
+  method=tools/list \
+  id:=1
+```
+
 ## 技術仕様
+
+### SSEプロトコル詳細
+
+#### Server-Sent Eventsの基本
+
+SSEは、HTTPを使用してサーバーからクライアントへ一方向のイベントストリームを送信するプロトコルです。
+
+**プロトコルの特徴**:
+- **Content-Type**: `text/event-stream`
+- **エンコーディング**: UTF-8
+- **改行**: `\n` (LF)
+- **イベント終端**: 空行 (`\n\n`)
+
+#### イベントフォーマット
+
+SSEイベントは以下の形式で送信されます：
+
+```
+event: <イベント名>\n
+data: <データ>\n
+id: <イベントID (オプション)>\n
+retry: <再接続間隔 (ミリ秒, オプション)>\n
+\n
+```
+
+**フィールド説明**:
+- `event`: イベントのタイプ（省略時は "message"）
+- `data`: イベントのデータ（複数行可能）
+- `id`: イベントのID（再接続時の Last-Event-ID ヘッダーで使用）
+- `retry`: 接続が切れた場合の再接続間隔（ミリ秒）
+
+**コメント**:
+```
+: これはコメントです\n
+```
+
+コメント行は`:` で始まり、keep-aliveとして使用されます。
+
+#### このサーバーのイベント
+
+**1. readyイベント**:
+```
+event: ready
+data: "ok"
+
+```
+
+接続が確立されたことを通知します。
+
+**2. pingイベント**:
+```
+event: ping
+data: 1704067200000
+
+```
+
+25秒ごとに送信され、現在のタイムスタンプ（ミリ秒）を含みます。
+
+**3. keep-aliveコメント**:
+```
+: keep-alive
+
+```
+
+接続を維持するための空コメント。
+
+#### クライアント側の実装詳細
+
+**EventSource API**:
+```javascript
+const eventSource = new EventSource(url);
+
+// デフォルトの "message" イベント
+eventSource.onmessage = (event) => {
+  console.log('Message:', event.data);
+};
+
+// カスタムイベント
+eventSource.addEventListener('ready', (event) => {
+  console.log('Ready:', event.data);
+});
+
+// エラーハンドリング
+eventSource.onerror = (error) => {
+  console.error('Error:', error);
+  // EventSourceは自動的に再接続を試みる
+};
+
+// 接続を閉じる
+eventSource.close();
+```
+
+**自動再接続**:
+EventSourceは接続が切れた場合、自動的に再接続を試みます：
+1. 接続が切れた場合、`onerror`イベントが発火
+2. デフォルトで3秒後に再接続を試みる
+3. サーバーが`retry`フィールドで再接続間隔を指定可能
+4. `Last-Event-ID`ヘッダーで最後に受信したイベントIDを送信
 
 ### SSEストリーム実装
 
@@ -410,6 +1081,83 @@ const stream = new ReadableStream<Uint8Array>({
 - **最大接続時間**: Cloudflare Workersの制限に依存（通常30秒〜数分）
 - **同時接続**: Cloudflare Workersのプランに依存
 
+### MCPにおけるSSEトランスポートの動作
+
+MCPプロトコルでSSEトランスポートを使用する場合、以下の2つのエンドポイントが必要です：
+
+#### 1. SSEエンドポイント（サーバー→クライアント）
+
+**目的**: サーバーからクライアントへのメッセージ送信
+
+**動作**:
+- クライアントがSSEエンドポイントに接続
+- サーバーはイベントストリームでメッセージを送信
+- JSON-RPC 2.0メッセージを `data` フィールドで送信
+
+**メッセージ例**:
+```
+event: message
+data: {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
+
+```
+
+#### 2. POSTエンドポイント（クライアント→サーバー）
+
+**目的**: クライアントからサーバーへのメッセージ送信
+
+**動作**:
+- クライアントがHTTP POSTでメッセージを送信
+- サーバーは同期的にレスポンスを返す
+- このプロジェクトでは `/rpc` エンドポイントが該当
+
+**リクエスト例**:
+```http
+POST /rpc HTTP/1.1
+Content-Type: application/json
+
+{"jsonrpc":"2.0","method":"tools/list","id":1}
+```
+
+**レスポンス例**:
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"jsonrpc":"2.0","result":{"tools":[...]},"id":1}
+```
+
+### JSON-RPC 2.0 over SSE
+
+MCP over SSEでは、JSON-RPC 2.0メッセージをSSEイベントとして送信します：
+
+**通知（Notification）**:
+```
+event: message
+data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}
+
+```
+
+**リクエスト（Request）**:
+```
+event: message
+data: {"jsonrpc":"2.0","method":"tools/list","id":1}
+
+```
+
+**レスポンス（Response）**:
+```
+event: message
+data: {"jsonrpc":"2.0","result":{"tools":[...]},"id":1}
+
+```
+
+**エラーレスポンス**:
+```
+event: message
+data: {"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found"},"id":1}
+
+```
+
 ## ベストプラクティス
 
 ### 1. シークレット管理
@@ -460,9 +1208,89 @@ SSEトランスポートを使用することで、リアルタイム通信が�
 
 ---
 
+## よくある質問（FAQ）
+
+### Q1: ブラウザのEventSourceでは認証ヘッダーを送信できないのですが？
+
+**A**: ブラウザの標準EventSource APIはカスタムヘッダーをサポートしていません。以下の方法があります：
+
+1. **URL内にトークンを含める**（非推奨）:
+   ```javascript
+   const eventSource = new EventSource(`/sse?token=${SECRET}`);
+   ```
+
+2. **polyfillを使用**:
+   ```javascript
+   import EventSourcePolyfill from 'event-source-polyfill';
+   const eventSource = new EventSourcePolyfill('/sse', {
+     headers: {
+       'Authorization': `Bearer ${SECRET}`
+     }
+   });
+   ```
+
+3. **Node.js環境を使用**: Node.jsの`eventsource`パッケージはカスタムヘッダーをサポート
+
+### Q2: SSEとWebSocketの違いは？
+
+**A**:
+- **SSE**: 一方向（サーバー→クライアント）、HTTPベース、自動再接続
+- **WebSocket**: 双方向、専用プロトコル、手動再接続
+
+MCPのSSEトランスポートは、SSE（サーバー→クライアント）とHTTP POST（クライアント→サーバー）を組み合わせて双方向通信を実現しています。
+
+### Q3: Cloudflare Workersでの接続時間制限は？
+
+**A**: Cloudflare Workersの無料プランでは、CPU時間は10ms、リクエスト全体では30秒の制限があります。有料プランではCPU時間50ms、リクエスト時間は最大15分まで延長可能です。
+
+長時間接続が必要な場合は、定期的に再接続するか、Cloudflare Durable Objectsの使用を検討してください。
+
+### Q4: 本番環境でのセキュリティ対策は？
+
+**A**:
+1. **HTTPS必須**: 本番環境では必ずHTTPSを使用
+2. **強力なシークレット**: 64文字のランダムな値を使用
+3. **レート制限**: Cloudflare Rate Limitingを設定
+4. **CORS設定**: 必要なオリジンのみを許可
+5. **ログ監視**: 異常なアクセスパターンを監視
+
+### Q5: Claude Desktop以外のクライアントは？
+
+**A**: MCP仕様に準拠したクライアントであれば使用可能です：
+- Cursor
+- Windsurf
+- カスタムMCPクライアント（自作）
+
+実装例は「JavaScriptクライアントの実装例」セクションを参照してください。
+
+### Q6: ローカル開発時のSSE接続が不安定なのですが？
+
+**A**: 以下を確認してください：
+1. ファイアウォールやウイルス対策ソフトがブロックしていないか
+2. プロキシ設定が干渉していないか
+3. `wrangler dev`が正常に動作しているか
+4. ブラウザの開発者ツールでネットワークエラーを確認
+
 ## 参考資料
 
-- [Model Context Protocol 公式ドキュメント](https://modelcontextprotocol.io/)
-- [Server-Sent Events 仕様](https://html.spec.whatwg.org/multipage/server-sent-events.html)
+### 公式ドキュメント
+- [Model Context Protocol 公式サイト](https://modelcontextprotocol.io/)
+- [MCP 仕様（GitHub）](https://github.com/modelcontextprotocol/specification)
+- [Server-Sent Events 仕様（WHATWG）](https://html.spec.whatwg.org/multipage/server-sent-events.html)
 - [Cloudflare Workers ドキュメント](https://developers.cloudflare.com/workers/)
 - [workers-mcp パッケージ](https://www.npmjs.com/package/workers-mcp)
+
+### 関連リソース
+- [JSON-RPC 2.0 仕様](https://www.jsonrpc.org/specification)
+- [EventSource API (MDN)](https://developer.mozilla.org/en-US/docs/Web/API/EventSource)
+- [Gemini API ドキュメント](https://ai.google.dev/docs)
+
+### コミュニティ
+- [MCP GitHub Discussions](https://github.com/modelcontextprotocol/specification/discussions)
+- [Cloudflare Developers Discord](https://discord.cloudflare.com/)
+
+---
+
+**最終更新**: 2025年1月
+**ドキュメントバージョン**: 1.0
+**対象MCPバージョン**: 2024-11-05 以降
