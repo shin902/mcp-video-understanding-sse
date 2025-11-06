@@ -325,7 +325,10 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
    * @ignore
    */
   private extractText(result: GeminiResponse): string {
-    if (!result) return ''
+    if (!result) {
+      console.warn('extractText: received null/undefined result from Gemini API')
+      return ''
+    }
 
     // 直接textプロパティをチェック
     if (typeof result.text === 'string' && result.text.length > 0) {
@@ -362,6 +365,12 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
       }
     }
 
+    // If we reach here, no text content was found in any expected location
+    console.warn('extractText: no text content found in Gemini API response', {
+      hasText: !!result.text,
+      hasResponse: !!result.response,
+      hasCandidates: !!(result.response?.candidates),
+    })
     return ''
   }
 }
