@@ -1,36 +1,36 @@
 # MCP Video Understanding
 
-## 概要
-このプロジェクトは、Geminiモデルを使用したビデオ理解システムのMCPサーバーです。
+## Overview
+This project is an MCP server for a video understanding system using the Gemini model.
 
-## 環境要件
+## Requirements
 - Node.js
 - TypeScript
 - Cloudflare Workers
 
-## セットアップ手順
-1. 依存関係のインストール
+## Setup Instructions
+1. Install dependencies
 ```bash
 npm install
 ```
 
-2. 環境変数の設定
-`.dev.vars.example` をコピーして `.dev.vars` を作成し、必要な環境変数を設定してください。`wrangler dev` 実行時に自動で読み込まれます。
+2. Configure environment variables
+Copy `.dev.vars.example` to `.dev.vars` and set the required environment variables. They will be automatically loaded when running `wrangler dev`.
 ```bash
 cp .dev.vars.example .dev.vars
 ```
-`GOOGLE_API_KEY` と `SHARED_SECRET` を自分の値に置き換えてください。
+Replace `GOOGLE_API_KEY` and `SHARED_SECRET` with your own values.
 
-## 開発
-- ビルド: `npm run build`（`build/index.js` が生成され、Claude などのローカル MCP クライアントで `node build/index.js` を実行できます）
-- テスト: `npm test`
-- 開発サーバー: `npm run dev`
-  - 初回に `workers-mcp docgen src/index.ts` が自動実行され、`dist/docs.json` が最新化されます。
-  - `http://127.0.0.1:8787/` で Worker を確認できます。
-  - SSE エンドポイントは `curl -H "Authorization: Bearer $SHARED_SECRET" http://127.0.0.1:8787/sse` などで確認できます。
+## Development
+- Build: `npm run build` (generates `build/index.js`, which can be run with `node build/index.js` in local MCP clients like Claude)
+- Test: `npm test`
+- Development server: `npm run dev`
+  - On first run, `workers-mcp docgen src/index.ts` is automatically executed to update `dist/docs.json`.
+  - Access the Worker at `http://127.0.0.1:8787/`
+  - Test the SSE endpoint with `curl -H "Authorization: Bearer $SHARED_SECRET" http://127.0.0.1:8787/sse`
 
-## デプロイ
+## Deployment
 `npm run deploy`
 
-## ライセンス
-詳細は`LICENSE`ファイルを参照してください。
+## License
+See the `LICENSE` file for details.
