@@ -5,6 +5,32 @@ import type { Env } from './env'
 
 const DEFAULT_PROMPT = "最初にこの記事全体を要約し全体像を掴んだ後、大きなセクションごとに細かく要約を行ってください。 その次に小さなセクションごとに更に詳細な要約を行ってください。"
 const DEFAULT_MODEL = "gemini-2.5-flash"
+const DEFAULT_PING_INTERVAL = 25000 // 25 seconds
+const MAX_REQUEST_SIZE = 10 * 1024 * 1024 // 10MB
+
+// Type definitions for Gemini API responses
+interface GeminiPart {
+  text?: string
+}
+
+interface GeminiCandidate {
+  content?: {
+    parts?: GeminiPart[]
+  }
+}
+
+interface GeminiResponse {
+  text?: string | (() => string)
+  response?: {
+    text?: string | (() => string)
+    candidates?: GeminiCandidate[]
+  }
+}
+
+interface ErrorWithStatus extends Error {
+  status?: string | number
+  code?: number
+}
 
 export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
   /**
@@ -20,7 +46,7 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
     model?: string
   ): Promise<string> {
     const apiKey = this.env.GOOGLE_API_KEY
-    if (!apiKey) {
+    if (!apiKey || apiKey.trim().length === 0) {
       throw new Error('GOOGLE_API_KEY environment variable is not set')
     }
 
@@ -77,6 +103,22 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
     const origin = request.headers.get('Origin')
     const corsHeaders = this.buildCorsHeaders(origin)
 
+    // TODO: Implement rate limiting using Cloudflare KV or Durable Objects
+    // Recommended limits:
+    // - /sse endpoint: 10 connections/minute/IP
+    // - /rpc endpoint: 60 requests/minute/IP
+    // - analyzeRemoteVideo: 10 requests/hour/IP
+    // For now, use Cloudflare Rate Limiting rules in the dashboard
+
+    // Request size validation
+    const contentLength = request.headers.get('content-length')
+    if (contentLength && parseInt(contentLength, 10) > MAX_REQUEST_SIZE) {
+      return new Response('Request body too large', {
+        status: 413,
+        headers: corsHeaders,
+      })
+    }
+
     if (url.pathname === '/sse') {
       if (request.method === 'OPTIONS') {
         return new Response(null, {
@@ -101,6 +143,19 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
       const encoder = new TextEncoder()
       let intervalHandle: ReturnType<typeof setInterval> | null = null
 
+      // Get configurable ping interval from environment, default to 25 seconds
+      const pingInterval = this.env.PING_INTERVAL
+        ? parseInt(this.env.PING_INTERVAL, 10)
+        : DEFAULT_PING_INTERVAL
+
+      // Consolidated cleanup function to avoid race conditions
+      const cleanup = () => {
+        if (intervalHandle) {
+          clearInterval(intervalHandle)
+          intervalHandle = null
+        }
+      }
+
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           // Immediately send a ready event so SSE clients know the stream is alive.
@@ -110,23 +165,17 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
           intervalHandle = setInterval(() => {
             controller.enqueue(encoder.encode('event: ping\n'))
             controller.enqueue(encoder.encode(`data: ${Date.now()}\n\n`))
-          }, 25000)
+          }, pingInterval)
 
           controller.enqueue(encoder.encode(': keep-alive\n\n'))
         },
         cancel() {
-          if (intervalHandle) {
-            clearInterval(intervalHandle)
-            intervalHandle = null
-          }
+          cleanup()
         },
       })
 
       request.signal.addEventListener('abort', () => {
-        if (intervalHandle) {
-          clearInterval(intervalHandle)
-          intervalHandle = null
-        }
+        cleanup()
       })
 
       return new Response(stream, {
@@ -200,15 +249,34 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
    * @ignore
    */
   private buildCorsHeaders(origin: string | null): Record<string, string> {
+    // Get allowed origins from environment variable
+    const allowedOrigins = this.env.ALLOWED_ORIGINS
+      ? this.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+      : []
+
+    let allowedOrigin: string
+    if (origin && allowedOrigins.length > 0 && allowedOrigins.includes(origin)) {
+      // Origin is in the allowlist
+      allowedOrigin = origin
+    } else if (allowedOrigins.length > 0) {
+      // Use first allowed origin as default
+      allowedOrigin = allowedOrigins[0]
+    } else {
+      // Fallback to wildcard only if no allowed origins configured (dev mode)
+      allowedOrigin = origin ?? '*'
+    }
+
     const headers: Record<string, string> = {
-      'Access-Control-Allow-Origin': origin ?? '*',
+      'Access-Control-Allow-Origin': allowedOrigin,
       'Access-Control-Allow-Headers': 'Authorization, Content-Type, Accept',
       'Access-Control-Max-Age': '86400',
       'Vary': 'Origin',
     }
-    if (origin && origin !== '*') {
+
+    if (allowedOrigin !== '*') {
       headers['Access-Control-Allow-Credentials'] = 'true'
     }
+
     return headers
   }
 
@@ -217,7 +285,7 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
    */
   private isInternalError(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false
-    const candidate = error as { status?: unknown; code?: unknown }
+    const candidate = error as ErrorWithStatus
 
     if (typeof candidate.status === 'number' && candidate.status === 500) return true
     if (typeof candidate.status === 'string') {
@@ -237,7 +305,7 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
    */
   private isPermissionError(error: unknown): boolean {
     if (!(error instanceof Error)) return false
-    const candidate = error as Error & { status?: string; code?: number }
+    const candidate = error as ErrorWithStatus
 
     if (typeof candidate.status === 'string' && candidate.status.toUpperCase() === 'PERMISSION_DENIED') {
       return true
@@ -256,7 +324,7 @@ export default class GeminiVideoWorker extends WorkerEntrypoint<Env> {
   /**
    * @ignore
    */
-  private extractText(result: any): string {
+  private extractText(result: GeminiResponse): string {
     if (!result) return ''
 
     // 直接textプロパティをチェック
